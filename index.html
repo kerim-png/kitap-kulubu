@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>📚 Miorec Kitap Kulübü — Kitap Seçimi Anketi</title>
+  <title>📚 Ofis Kitap Kulübü — Kitap Seçimi Anketi</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -634,47 +634,45 @@
   </footer>
 
   <script>
-    // ── STATE ────────────────────────────────────────────
-    const STORAGE_KEY = 'bookclub_votes_v1';
-    const VOTER_KEY   = 'bookclub_voter_v1';
+    // ══════════════════════════════════════════════════════
+    //  AYAR: Google Apps Script URL'ini buraya yapıştır
+    // ══════════════════════════════════════════════════════
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx-9pnVwGAzFfIxSUZ984qKLvUOc5FApM_t7iJmiuOzlWVstLidV6DeDPwRIApkaT-2/exec';
 
+    const VOTER_KEY = 'bookclub_voter_v2';
     const BOOKS = [
       'Casuslar Sahili',
       'Sputnik Sevgilim',
       'Kırmızı Pazartesi',
       'Acı Kahve',
     ];
-
     let selectedBook = null;
+    let pollTimer = null;
 
     // ── INIT ─────────────────────────────────────────────
     window.addEventListener('DOMContentLoaded', () => {
       checkAlreadyVoted();
       updateSubmitBtn();
-      renderResults();
-
+      fetchAndRenderResults();
+      // Canlı takip: her 10 saniyede güncelle
+      pollTimer = setInterval(fetchAndRenderResults, 10000);
       document.getElementById('voter-name').addEventListener('input', updateSubmitBtn);
     });
 
     // ── SELECT ───────────────────────────────────────────
     function selectBook(card) {
-      // Guard: if click bubbled from button, avoid double-fire
       if (hasVoted()) return;
-
-      const bookName = card.dataset.book;
-      selectedBook = bookName;
-
-      document.querySelectorAll('.book-card').forEach(c => {
-        c.classList.toggle('selected', c.dataset.book === bookName);
-      });
+      selectedBook = card.dataset.book;
+      document.querySelectorAll('.book-card').forEach(c =>
+        c.classList.toggle('selected', c.dataset.book === selectedBook)
+      );
       updateSubmitBtn();
     }
 
     // ── SUBMIT ───────────────────────────────────────────
-    function submitVote() {
+    async function submitVote() {
       const nameInput = document.getElementById('voter-name');
       const name = nameInput.value.trim();
-
       if (!name) {
         nameInput.focus();
         nameInput.style.borderColor = 'var(--wine)';
@@ -683,13 +681,26 @@
       }
       if (!selectedBook) return;
 
-      // Save vote
-      const votes = getVotes();
-      votes[selectedBook] = (votes[selectedBook] || 0) + 1;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(votes));
-      localStorage.setItem(VOTER_KEY, JSON.stringify({ name, book: selectedBook }));
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Gönderiliyor...';
 
-      showSuccess(name, selectedBook);
+      try {
+        await fetch(SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, book: selectedBook, timestamp: Date.now() })
+        });
+        // no-cors ile response body okunamaz ama istek gider
+        localStorage.setItem(VOTER_KEY, JSON.stringify({ name, book: selectedBook }));
+        showSuccess(name, selectedBook);
+        fetchAndRenderResults();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Oyumu Gönder →';
+        alert('Bağlantı hatası, lütfen tekrar deneyin.');
+      }
     }
 
     // ── SUCCESS ──────────────────────────────────────────
@@ -697,63 +708,48 @@
       document.getElementById('books-grid').style.opacity = '0.35';
       document.getElementById('books-grid').style.pointerEvents = 'none';
       document.getElementById('submit-area').style.display = 'none';
-
       const panel = document.getElementById('success-panel');
       panel.style.display = 'block';
       document.getElementById('success-msg').textContent =
         `${name}, oyunuz başarıyla kaydedildi. İyi okumalar dileriz!`;
       document.getElementById('success-book-name').textContent = '📖 ' + book;
-
-      renderResults();
     }
 
     // ── ALREADY VOTED ────────────────────────────────────
-    function hasVoted() {
-      return !!localStorage.getItem(VOTER_KEY);
-    }
+    function hasVoted() { return !!localStorage.getItem(VOTER_KEY); }
 
     function checkAlreadyVoted() {
       if (!hasVoted()) return;
-
       const { name, book } = JSON.parse(localStorage.getItem(VOTER_KEY));
-
-      // Pre-fill name
       document.getElementById('voter-name').value = name;
       document.getElementById('voter-name').disabled = true;
-
-      // Disable cards
       document.querySelectorAll('.book-card').forEach(c => {
         c.classList.add('disabled');
-        if (c.dataset.book === book) {
-          c.classList.remove('disabled');
-          c.classList.add('selected');
-        }
+        if (c.dataset.book === book) { c.classList.remove('disabled'); c.classList.add('selected'); }
       });
-
       selectedBook = book;
       showSuccess(name, book);
     }
 
-    // ── RESULTS ──────────────────────────────────────────
-    function getVotes() {
+    // ── CANLI SONUÇLAR ────────────────────────────────────
+    async function fetchAndRenderResults() {
       try {
-        return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
-      } catch { return {}; }
+        const res = await fetch(SCRIPT_URL + '?action=get', { cache: 'no-store' });
+        const data = await res.json();
+        renderResults(data.votes, data.total, data.voters);
+      } catch {
+        // Script URL henüz ayarlanmamışsa sessizce geç
+      }
     }
 
-    function renderResults() {
-      const votes = getVotes();
-      const total = Object.values(votes).reduce((s, v) => s + v, 0);
-
+    function renderResults(votes = {}, total = 0, voters = []) {
       if (total === 0) return;
-
       const panel = document.getElementById('results-panel');
       panel.style.display = 'block';
-
       const list = document.getElementById('results-list');
       list.innerHTML = '';
 
-      // Sort by votes desc
+      // Başlık + oy sayısı + son oylayanlar
       const sorted = BOOKS.map(b => ({ book: b, count: votes[b] || 0 }))
                           .sort((a, b) => b.count - a.count);
 
@@ -763,13 +759,39 @@
         row.className = 'result-row';
         row.innerHTML = `
           <div class="result-book-name">${book}</div>
-          <div class="result-bar-wrap">
-            <div class="result-bar" style="width:${pct}%"></div>
-          </div>
+          <div class="result-bar-wrap"><div class="result-bar" style="width:${pct}%"></div></div>
           <div class="result-count">${count} oy &nbsp; ${pct}%</div>
         `;
         list.appendChild(row);
       });
+
+      // Son oylayanlar listesi
+      let votersEl = document.getElementById('voters-list');
+      if (!votersEl) {
+        votersEl = document.createElement('div');
+        votersEl.id = 'voters-list';
+        votersEl.style.cssText = 'max-width:700px;margin:24px auto 0;padding:0 24px;';
+        document.getElementById('results-panel').appendChild(votersEl);
+      }
+      if (voters.length > 0) {
+        votersEl.innerHTML = `<div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;color:var(--sepia);margin-bottom:12px;text-align:center;">🗳 Oy Kullananlar (${total} kişi)</div>` +
+          voters.slice().reverse().map(v => `
+            <div style="display:flex;justify-content:space-between;align-items:center;background:#fff;border:1.5px solid var(--border);border-radius:5px;padding:10px 16px;margin-bottom:8px;font-size:0.85rem;box-shadow:0 2px 6px var(--shadow);">
+              <span style="font-family:'Playfair Display',serif;font-weight:700;color:var(--ink);">${v.name}</span>
+              <span style="color:var(--sepia);font-style:italic;">${v.book}</span>
+              <span style="color:#b09878;font-size:0.75rem;">${new Date(v.timestamp).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})}</span>
+            </div>`).join('');
+      }
+
+      // Canlı güncelleme göstergesi
+      let liveEl = document.getElementById('live-badge');
+      if (!liveEl) {
+        liveEl = document.createElement('div');
+        liveEl.id = 'live-badge';
+        liveEl.style.cssText = 'text-align:center;margin-top:10px;font-size:0.75rem;color:#b09878;letter-spacing:0.05em;';
+        document.getElementById('results-panel').prepend(liveEl);
+      }
+      liveEl.innerHTML = `🟢 Canlı &nbsp;·&nbsp; Son güncelleme: ${new Date().toLocaleTimeString('tr-TR')}`;
     }
 
     // ── SUBMIT BTN STATE ─────────────────────────────────
